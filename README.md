@@ -16,6 +16,18 @@ docker compose up -d --build
 
 Open **http://localhost:8000**
 
+### "port is already allocated"?
+
+Another program is already using port 8000. Pick a different port by creating a
+`.env` file next to `docker-compose.yml`:
+
+```bash
+echo APP_PORT=8080 > .env
+docker compose up -d
+```
+
+Then open **http://localhost:8080** instead.
+
 | Task | Command |
 |---|---|
 | Stop | `docker compose down` (your data is kept) |

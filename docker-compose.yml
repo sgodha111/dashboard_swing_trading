@@ -25,7 +25,8 @@ services:
       # Minutes before cached market data is considered stale
       PRICE_CACHE_MINUTES: "15"
     ports:
-      - "8000:8000"
+      # Host port: change with APP_PORT in .env (e.g. APP_PORT=8080) if 8000 is in use
+      - "${APP_PORT:-8000}:8000"
 
 volumes:
   pgdata:
