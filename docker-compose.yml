@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: swing
+      POSTGRES_PASSWORD: swing
+      POSTGRES_DB: swing
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swing -d swing"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: ./app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://swing:swing@db:5432/swing
+      # Minutes before cached market data is considered stale
+      PRICE_CACHE_MINUTES: "15"
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

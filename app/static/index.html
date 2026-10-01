@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swing Trading Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><path d=%22M1 12l4-4 3 3 6-7%22 stroke=%22%232f6fed%22 stroke-width=%222%22 fill=%22none%22/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Swing Trading Dashboard</h1>
+  <div class="header-actions">
+    <button id="refreshBtn" title="Re-download prices for all open positions">↻ Refresh prices</button>
+    <a class="button ghost" href="/api/export.csv">Export CSV</a>
+    <button class="ghost" id="settingsBtn">⚙ Settings</button>
+  </div>
+</header>
+
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <h2>Add trade</h2>
+    <form id="tradeForm" autocomplete="off">
+      <label>Symbol<input name="symbol" required placeholder="AAPL, ASML.AS, RELIANCE.NS"></label>
+      <label>Entry date<input name="entry_date" type="date" required></label>
+      <label>Entry price<input name="entry_price" type="number" step="any" min="0" required></label>
+      <label>Stop price <small>(optional)</small><input name="stop_price" type="number" step="any" min="0" placeholder="auto: ATR / %"></label>
+      <label>Shares <small>(optional)</small><input name="shares" type="number" step="1" min="1" placeholder="auto: from risk"></label>
+      <label>Setup<select name="setup">
+        <option>Pullback to 20 SMA</option>
+        <option>Pullback to 50 SMA</option>
+        <option>Support bounce</option>
+        <option>Breakout</option>
+        <option>Other</option>
+      </select></label>
+      <label class="wide">Notes<input name="notes" placeholder="Why this trade? Trigger, catalyst, etc."></label>
+      <div class="form-actions">
+        <button type="button" id="previewBtn" class="ghost">Calculate</button>
+        <button type="submit">Add trade</button>
+      </div>
+    </form>
+    <div id="preview" class="preview hidden"></div>
+  </section>
+
+  <section class="card">
+    <div class="tabs">
+      <button class="tab active" data-status="open">Open positions</button>
+      <button class="tab" data-status="closed">Closed / journal</button>
+    </div>
+    <div class="table-wrap"><table id="tradesTable"></table></div>
+    <p class="muted legend" id="legend"></p>
+  </section>
+
+  <section class="card rules">
+    <h2>Strategy rules used by the calculator</h2>
+    <ul id="rulesList"></ul>
+    <p class="muted">Educational tool, not financial advice. Prices from Yahoo Finance (end-of-day / delayed). Long trades only.</p>
+  </section>
+</main>
+
+<dialog id="settingsDlg">
+  <form method="dialog" id="settingsForm">
+    <h2>Settings</h2>
+    <div class="grid2">
+      <label>Currency symbol<input name="currency" required></label>
+      <label>Account size<input name="account_size" type="number" step="any" required></label>
+      <label>Risk per trade (%)<input name="risk_pct" type="number" step="any" required></label>
+      <label>Target 1 (R multiple)<input name="target1_rr" type="number" step="any" required></label>
+      <label>Target 2 (R multiple)<input name="target2_rr" type="number" step="any" required></label>
+      <label>Move stop to breakeven at (R)<input name="breakeven_r" type="number" step="any" required></label>
+      <label>ATR multiple (stop / trail)<input name="atr_multiple" type="number" step="any" required></label>
+      <label>Fallback stop (%)<input name="default_stop_pct" type="number" step="any" required></label>
+      <label>Time stop (days)<input name="max_hold_days" type="number" step="1" required></label>
+      <label>Max open positions<input name="max_open_positions" type="number" step="1" required></label>
+    </div>
+    <div class="form-actions">
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="save" id="saveSettings">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="closeDlg">
+  <form method="dialog" id="closeForm">
+    <h2>Close <span id="closeSymbol"></span></h2>
+    <label>Exit price<input name="exit_price" type="number" step="any" required></label>
+    <label>Exit date<input name="exit_date" type="date" required></label>
+    <label>Reason<select name="exit_reason">
+      <option>Stop hit</option>
+      <option>Target 1</option>
+      <option>Target 2</option>
+      <option>Trailing stop</option>
+      <option>Trend broken (SMA50)</option>
+      <option>Time stop</option>
+      <option>Discretionary</option>
+    </select></label>
+    <div class="form-actions">
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="save">Close trade</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="editDlg">
+  <form method="dialog" id="editForm">
+    <h2>Edit <span id="editSymbol"></span></h2>
+    <label>Initial stop (defines 1R)<input name="stop_price" type="number" step="any"></label>
+    <label>Shares<input name="shares" type="number" step="1" min="1"></label>
+    <label>Manual current price <small>(blank = use market data)</small><input name="manual_price" type="number" step="any"></label>
+    <label>Notes<input name="notes"></label>
+    <div class="form-actions">
+      <button value="delete" class="danger" formnovalidate>Delete</button>
+      <span class="spacer"></span>
+      <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+      <button value="save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
