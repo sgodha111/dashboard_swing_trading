@@ -63,13 +63,14 @@ input, select {
 .preview { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .preview .item { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
 .preview .item b { display: block; font-size: 16px; }
-.preview .item span { font-size: 12px; color: var(--muted); }
+.preview .item > span { font-size: 12px; color: var(--muted); }
 .preview .note { grid-column: 1 / -1; font-size: 13px; }
 
 .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
 .kpi > span { font-size: 12px; color: var(--muted); display: block; }
 .kpi b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.kpi b small { font-size: 12px; font-weight: 400; }
 
 .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .tab { background: transparent; color: var(--muted); border-color: var(--border); }

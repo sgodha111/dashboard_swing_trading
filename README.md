@@ -41,16 +41,20 @@ automatically when Docker starts.
 
 ## What it calculates
 
-Set your account size, risk % and the other rules under **⚙ Settings**.
-The defaults follow the strategy: a €10,000 account, 1% risk, targets at 2R and 3R.
+Set your starting capital, risk % and the other rules under **⚙ Settings**.
+The defaults: ₹1,00,000 starting capital, 1% risk, targets at 2R and 3R,
+and NSE symbols (`.NS`).
 
 | Item | Rule |
 |---|---|
 | **Stop loss** | Your own stop (ideally below the recent swing low). If you leave it blank: entry − 2 × ATR(14), or 5% below entry when no market data is available |
 | **1R** | entry − initial stop |
-| **Shares** | (account × risk %) ÷ 1R, capped so the position isn't bigger than the account |
+| **Shares** | (equity × risk %) ÷ 1R, capped by the cash still available |
+| **Capital** | Equity = starting capital + realised profit/loss. Available cash = equity − money in open trades, so it goes down with every trade you add |
 | **Target 1** | entry + 2R → sell about half |
 | **Target 2** | entry + 3R → exit the rest |
+| **Profit** | What you'd earn at Target 1, at Target 2, and with the planned exit (half at T1, half at T2). Shown per trade and in total |
+| **Your target** | Optional target price per trade: shows the profit and R:R at that price, and signals EXIT when it's reached |
 | **Breakeven** | after a close at +1R, move the stop to the entry price |
 | **Trailing stop** | after Target 1, the stop trails at highest close − 2 × ATR |
 | **Trend exit** | a close more than 0.5 ATR below the 50-day SMA (just below it gives a warning) |
@@ -72,13 +76,10 @@ downloads every trade.
 
 Daily prices come from Yahoo Finance through `yfinance`. They are cached in the
 database for 15 minutes. Click **↻ Refresh prices** to force an update.
-Use Yahoo symbols:
-
-* US: `AAPL`, `MSFT`
-* Amsterdam: `ASML.AS`
-* Germany: `SAP.DE`
-* London: `VOD.L`
-* India (NSE): `RELIANCE.NS`
+Just type the NSE symbol (`RELIANCE`, `TCS`, `INFY`) and `.NS` is added for you.
+Change the **Exchange suffix** in Settings to `.BO` for BSE, or clear it to type
+full Yahoo symbols (`AAPL`, `ASML.AS`). Prices are not converted between
+currencies, so trade stocks in the same currency as your account.
 
 If there is no data (no internet, or an unknown symbol), open **Edit** on the
 trade and enter a **manual current price**. The signals still work.

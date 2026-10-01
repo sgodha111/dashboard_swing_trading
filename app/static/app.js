@@ -33,7 +33,9 @@ function toast(msg, err = false) {
 }
 
 const cur = () => settings?.currency ?? "";
-const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v) ? "—" : Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }));
+// Indian digit grouping (1,00,000) when trading in rupees
+const locale = () => (settings?.currency === "₹" ? "en-IN" : undefined);
+const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v) ? "—" : Number(v).toLocaleString(locale(), { minimumFractionDigits: d, maximumFractionDigits: d }));
 const money = (v, d = 2) => (v === null || v === undefined ? "—" : `${v < 0 ? "-" : ""}${cur()}${num(Math.abs(v), d)}`);
 const signed = (v, fmt) => (v === null || v === undefined ? "—" : `<span class="${v >= 0 ? "pos" : "neg"}">${v > 0 ? "+" : ""}${fmt(v)}</span>`);
 const pct = (v) => signed(v, (x) => `${num(x, 1)}%`);
@@ -54,12 +56,13 @@ async function loadSettings() {
   settings = await api("/api/settings");
   const s = settings;
   $("#rulesList").innerHTML = [
-    `Risk <b>${s.risk_pct}%</b> of a ${money(s.account_size, 0)} account per trade → max loss <b>${money((s.account_size * s.risk_pct) / 100)}</b>. Shares = max loss ÷ (entry − stop), capped at the account size.`,
+    `Risk <b>${s.risk_pct}%</b> of your equity per trade (starting capital ${money(s.account_size, 0)} + realised profit/loss). Shares = max loss ÷ (entry − stop), capped by the <b>cash still available</b> — money in open trades is subtracted.`,
     `Initial stop: your own (below the recent swing low) — or, if left blank, entry − <b>${s.atr_multiple}× ATR(14)</b>, falling back to <b>${s.default_stop_pct}%</b> below entry.`,
-    `1R = entry − initial stop. <b>Target 1 = +${s.target1_rr}R</b> (sell ~half), <b>Target 2 = +${s.target2_rr}R</b> (exit the rest).`,
+    `1R = entry − initial stop. <b>Target 1 = +${s.target1_rr}R</b> (sell ~half), <b>Target 2 = +${s.target2_rr}R</b> (exit the rest). "Planned profit" = half sold at Target 1 + half at Target 2. You can also set your own target price per trade.`,
     `After a close at <b>+${s.breakeven_r}R</b>, move the stop to breakeven. After Target 1, trail the stop at highest close − ${s.atr_multiple}× ATR.`,
     `Trend filter: price &gt; SMA50 &gt; SMA200. Exit if price closes clearly below the SMA50 (more than 0.5 ATR); a warning is shown when just below.`,
     `Time stop: after <b>${s.max_hold_days} days</b> without reaching +${s.breakeven_r}R, consider freeing the capital. Max <b>${s.max_open_positions}</b> open positions.`,
+    s.exchange_suffix ? `Symbols without a suffix get <b>${esc(s.exchange_suffix)}</b> added (e.g. RELIANCE → RELIANCE${esc(s.exchange_suffix)}). Change this in Settings.` : `Enter full Yahoo symbols (e.g. RELIANCE.NS, AAPL).`,
   ].map((x) => `<li>${x}</li>`).join("");
 }
 
@@ -83,13 +86,19 @@ async function loadSummary() {
   const s = await api("/api/summary");
   const kpi = (label, value) => `<div class="kpi"><span>${label}</span><b>${value}</b></div>`;
   $("#kpis").innerHTML = [
-    kpi("Equity (realised)", money(s.equity, 0)),
+    kpi("Available cash", `<span class="${s.available_capital < 0 ? "neg" : ""}">${money(s.available_capital, 0)}</span>`),
+    kpi("Capital in trades", `${money(s.capital_deployed, 0)} <small class="muted">${num(s.capital_deployed_pct, 0)}%</small>`),
+    kpi("Account value", `${money(s.account_value, 0)} <small class="muted">cash + positions</small>`),
     kpi("Open positions", `${s.open_positions} / ${s.max_open_positions}`),
+    kpi("Profit at Target 1", signed(s.potential_target1, (x) => money(x, 0))),
+    kpi("Profit at Target 2", signed(s.potential_target2, (x) => money(x, 0))),
+    kpi("Planned profit", `${signed(s.potential_plan, (x) => money(x, 0))} <small class="muted">½ T1 + ½ T2</small>`),
+    kpi("Loss if all stops hit", money(-s.max_loss_total, 0)),
     kpi("Exit signals", `<span class="${s.exit_signals ? "neg" : ""}">${s.exit_signals}</span>${s.action_signals ? ` <small class="muted">+${s.action_signals} action</small>` : ""}`),
     kpi("Unrealised P&L", signed(s.unrealized_pnl, (x) => money(x))),
     kpi("Open risk (to stops)", money(s.open_risk)),
-    kpi("Capital deployed", `${money(s.capital_deployed, 0)} <small class="muted">${num(s.capital_deployed_pct, 0)}%</small>`),
     kpi("Realised P&L", signed(s.total_pnl, (x) => money(x))),
+    kpi("Equity", `${money(s.equity, 0)} <small class="muted">start ${money(s.account_size, 0)}</small>`),
     kpi("Win rate", s.win_rate === null ? "—" : `${num(s.win_rate, 0)}% <small class="muted">${s.wins}W/${s.losses}L</small>`),
     kpi("Expectancy", s.avg_r === null ? "—" : rmult(s.avg_r)),
     kpi("Avg win / loss", `${s.avg_win === null ? "—" : money(s.avg_win, 0)} / ${s.avg_loss === null ? "—" : money(s.avg_loss, 0)}`),
@@ -116,8 +125,10 @@ function openRow(t) {
     <td>${signed(t.pnl, (x) => money(x))}<span class="sub">${pct(t.pnl_pct)} · ${rmult(t.r_multiple)}</span></td>
     <td>${num(t.stop_price)}<span class="sub">${esc(t.stop_method)} · −${num(t.stop_pct, 1)}%</span></td>
     <td><b>${num(t.current_stop)}</b><span class="sub">${esc(t.stop_label)}</span></td>
-    <td>${num(t.target1)}<span class="sub">+${settings.target1_rr}R</span></td>
-    <td>${num(t.target2)}<span class="sub">+${settings.target2_rr}R</span></td>
+    <td>${num(t.target1)}<span class="sub pos">+${money(t.profit_target1, 0)}</span></td>
+    <td>${num(t.target2)}<span class="sub pos">+${money(t.profit_target2, 0)}</span></td>
+    <td>${t.target_price ? `${num(t.target_price)}<span class="sub pos">+${money(t.profit_target, 0)} · ${num(t.target_rr, 1)}R</span>` : `<span class="muted">—</span>`}</td>
+    <td class="pos">+${money(t.profit_plan, 0)}<span class="sub">${t.to_target2 !== null && t.to_target2 > 0 ? `${money(t.to_target2, 0)} left to T2` : ""}</span></td>
     <td>${progressBar(t)}</td>
     <td>${money(t.max_loss)}<span class="sub">open risk ${money(t.open_risk)}</span></td>
     <td class="l"><span class="${trend}">${t.trend?.ok === true ? "✓ Up" : t.trend?.ok === false ? "✗ Weak" : "?"}</span><span class="sub">SMA50 ${num(t.sma50)} · 200 ${num(t.sma200)}</span></td>
@@ -149,9 +160,9 @@ function renderTable() {
     const rows = [...trades].sort((a, b) => SIGNAL_ORDER[a.signal] - SIGNAL_ORDER[b.signal]);
     table.innerHTML = `<thead><tr>
       <th class="l">Symbol</th><th>Entry</th><th>Price</th><th>P&amp;L</th><th>Initial stop</th>
-      <th>Current stop</th><th>Target 1</th><th>Target 2</th><th>Progress</th><th>Max loss</th>
+      <th>Current stop</th><th>Target 1</th><th>Target 2</th><th>Your target</th><th>Planned profit</th><th>Progress</th><th>Max loss</th>
       <th class="l">Trend</th><th>Held</th><th class="l">What to do</th><th></th></tr></thead>
-      <tbody>${rows.map(openRow).join("") || `<tr><td colspan="14" class="l muted">No open positions — add one above.</td></tr>`}</tbody>`;
+      <tbody>${rows.map(openRow).join("") || `<tr><td colspan="16" class="l muted">No open positions — add one above.</td></tr>`}</tbody>`;
     $("#legend").innerHTML = "Sorted by urgency. <b>EXIT</b> = sell now per your rules · <b>ACTION</b> = adjust stop / take partial profit · <b>WATCH</b> = needs attention · <b>HOLD</b> = plan unchanged. Progress bar: stop → entry | T1 | T2.";
   } else {
     table.innerHTML = `<thead><tr>
@@ -206,7 +217,7 @@ $("#tradesTable").addEventListener("click", async (ev) => {
       f.elements.exit_price.value = t.price ?? "";
       f.elements.exit_date.value = new Date().toISOString().slice(0, 10);
       const a = t.action ?? "";
-      f.elements.exit_reason.value = a.includes("Target 2") ? "Target 2" : a.includes("SMA50") ? "Trend broken (SMA50)" : a.includes("rail") ? "Trailing stop" : a.includes("stop hit") ? "Stop hit" : a.includes("Time") ? "Time stop" : "Discretionary";
+      f.elements.exit_reason.value = a.includes("Target 2") ? "Target 2" : a.includes("your target") ? "Your target" : a.includes("SMA50") ? "Trend broken (SMA50)" : a.includes("rail") ? "Trailing stop" : a.includes("stop hit") ? "Stop hit" : a.includes("Time") ? "Time stop" : "Discretionary";
       $("#closeDlg").showModal();
     } else if (btn.dataset.edit) {
       $("#editSymbol").textContent = t.symbol;
@@ -214,6 +225,7 @@ $("#tradesTable").addEventListener("click", async (ev) => {
       f.elements.stop_price.value = t.stop_price;
       f.elements.shares.value = t.shares;
       f.elements.manual_price.value = t.manual_price ?? "";
+      f.elements.target_price.value = t.target_price ?? "";
       f.elements.notes.value = t.notes ?? "";
       $("#editDlg").showModal();
     } else if (btn.dataset.reopen) {
@@ -247,6 +259,7 @@ $("#editDlg").addEventListener("close", async () => {
       const f = $("#editForm");
       const body = formData(f);
       body.manual_price = f.elements.manual_price.value === "" ? 0 : Number(f.elements.manual_price.value);
+      body.target_price = f.elements.target_price.value === "" ? 0 : Number(f.elements.target_price.value);
       body.notes = f.elements.notes.value;
       await api(`/api/trades/${activeId}`, { method: "PUT", body });
     } else return;
@@ -262,6 +275,8 @@ function renderPreview(p) {
   if (p.data_error) notes.push(`⚠ Market data unavailable (${esc(p.data_error)}) — stop uses the % fallback unless you enter one.`);
   if (trend?.ok === false) notes.push(`⚠ Trend filter failed at entry: ${esc(trend.text)}`);
   else if (trend?.ok) notes.push(`✓ Trend filter: ${esc(trend.text)}`);
+  notes.push(`Symbol: <b>${esc(p.symbol)}</b>`);
+  if (p.available_after < 0) notes.push(`⚠ Not enough cash: this trade needs ${money(p.position_value, 0)} but only ${money(p.available_capital, 0)} is available.`);
   if (p.shares !== p.suggested_shares) notes.push(`You entered ${p.shares} shares; the risk rule suggests ${p.suggested_shares}.`);
   if (p.risk_pct_of_account > settings.risk_pct + 0.01) notes.push(`⚠ This risks ${num(p.risk_pct_of_account, 2)}% of the account (limit ${settings.risk_pct}%).`);
   $("#preview").innerHTML = [
@@ -269,10 +284,15 @@ function renderPreview(p) {
     item("Risk / share (1R)", money(p.risk_per_share)),
     item("Shares", p.shares, `suggested ${p.suggested_shares}`),
     item("Position value", money(p.position_value, 0)),
-    item("Max loss", money(p.max_loss), `${num(p.risk_pct_of_account, 2)}% of account`),
+    item("Max loss", money(p.max_loss), `${num(p.risk_pct_of_account, 2)}% of equity`),
+    item("Cash left after", `<span class="${p.available_after < 0 ? "neg" : ""}">${money(p.available_after, 0)}</span>`, `available now ${money(p.available_capital, 0)}`),
     item("Breakeven trigger", num(p.breakeven_trigger), `+${settings.breakeven_r}R → stop to entry`),
     item("Target 1", num(p.target1), `+${settings.target1_rr}R · sell ~half`),
     item("Target 2", num(p.target2), `+${settings.target2_rr}R · exit rest`),
+    item("Profit at Target 1", `<span class="pos">+${money(p.profit_target1)}</span>`, `all ${p.shares} shares`),
+    item("Profit at Target 2", `<span class="pos">+${money(p.profit_target2)}</span>`, `all ${p.shares} shares`),
+    item("Planned profit", `<span class="pos">+${money(p.profit_plan)}</span>`, "½ at T1 + ½ at T2"),
+    p.target_price ? item("Profit at your target", `<span class="pos">+${money(p.profit_target)}</span>`, `${num(p.target_price)} · +${num(p.target_pct, 1)}% · ${num(p.target_rr, 1)}R`) : "",
     item("ATR(14) at entry", num(p.atr_at_entry)),
     notes.length ? `<div class="note">${notes.join("<br>")}</div>` : "",
   ].join("");
@@ -296,8 +316,11 @@ $("#tradeForm").addEventListener("submit", async (ev) => {
     const summary = await api("/api/summary");
     if (summary.open_positions >= summary.max_open_positions &&
         !confirm(`You already have ${summary.open_positions} open positions (max ${summary.max_open_positions}). Add anyway?`)) return;
+    const p = await api("/api/preview", { method: "POST", body: formData(f) });
+    if (p.available_after < 0 &&
+        !confirm(`This trade costs ${money(p.position_value, 0)} but only ${money(p.available_capital, 0)} cash is available. Add anyway?`)) return;
     const t = await api("/api/trades", { method: "POST", body: formData(f) });
-    toast(`${t.symbol} added: ${t.shares} shares, stop ${num(t.stop_price)}, T1 ${num(t.target1)}`);
+    toast(`${t.symbol} added: ${t.shares} shares, stop ${num(t.stop_price)}, profit at T1 +${money(t.profit_target1, 0)}`);
     f.reset();
     f.elements.entry_date.value = new Date().toISOString().slice(0, 10);
     $("#preview").classList.add("hidden");

@@ -18,7 +18,8 @@ def bars_from(closes, start=date(2026, 1, 1), spread=1.0):
 
 
 def trade(**kw):
-    base = dict(entry_price=100.0, stop_price=95.0, shares=20, entry_date=date(2026, 9, 1), manual_price=None)
+    base = dict(entry_price=100.0, stop_price=95.0, shares=20, entry_date=date(2026, 9, 1), manual_price=None,
+                target_price=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -74,3 +75,28 @@ def test_journal_stats():
         {"pnl": -100, "r_multiple": -1, "days_held": 3},
     ])
     assert abs(s["win_rate"] - 100 / 3) < 1e-9 and s["profit_factor"] == 1 and s["max_drawdown"] == 200 and s["avg_r"] == 0
+
+
+def test_position_size_capped_by_available_cash():
+    # ₹1,00,000 equity, 1% risk = ₹1,000; ₹10 risk/share -> 100 shares, but only ₹5,000 cash left
+    assert calc.position_size(100, 90, S, equity=100000, available=100000) == 100
+    assert calc.position_size(100, 90, S, equity=100000, available=5000) == 50
+    assert calc.position_size(100, 90, S, equity=100000, available=-10) == 0
+
+
+def test_capital_reduces_with_open_trades():
+    c = calc.capital(S, realised_pnl=500, deployed=4000)
+    assert c == {"equity": 10500, "capital_deployed": 4000, "available_capital": 6500}
+
+
+def test_profit_at_targets():
+    p = calc.plan(100, 95, 21, S, target=112)
+    assert p["profit_target1"] == 210 and p["profit_target2"] == 315
+    assert p["profit_plan"] == 10 * 10 + 11 * 15  # 10 shares sold at T1, 11 at T2
+    assert p["profit_target"] == 252 and p["target_rr"] == 2.4
+
+
+def test_own_target_exit_signal():
+    r = calc.evaluate(trade(target_price=108, manual_price=108.5), S, {}, date(2026, 9, 10))
+    assert r["signal"] == calc.EXIT and "your target" in r["action"]
+    assert r["to_target2"] == (115 - 108.5) * 20

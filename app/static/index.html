@@ -23,11 +23,12 @@
   <section class="card">
     <h2>Add trade</h2>
     <form id="tradeForm" autocomplete="off">
-      <label>Symbol<input name="symbol" required placeholder="AAPL, ASML.AS, RELIANCE.NS"></label>
+      <label>Symbol<input name="symbol" required placeholder="RELIANCE, TCS, INFY"></label>
       <label>Entry date<input name="entry_date" type="date" required></label>
       <label>Entry price<input name="entry_price" type="number" step="any" min="0" required></label>
       <label>Stop price <small>(optional)</small><input name="stop_price" type="number" step="any" min="0" placeholder="auto: ATR / %"></label>
       <label>Shares <small>(optional)</small><input name="shares" type="number" step="1" min="1" placeholder="auto: from risk"></label>
+      <label>Your target price <small>(optional)</small><input name="target_price" type="number" step="any" min="0" placeholder="see profit at this price"></label>
       <label>Setup<select name="setup">
         <option>Pullback to 20 SMA</option>
         <option>Pullback to 50 SMA</option>
@@ -65,7 +66,7 @@
     <h2>Settings</h2>
     <div class="grid2">
       <label>Currency symbol<input name="currency" required></label>
-      <label>Account size<input name="account_size" type="number" step="any" required></label>
+      <label>Starting capital<input name="account_size" type="number" step="any" required></label>
       <label>Risk per trade (%)<input name="risk_pct" type="number" step="any" required></label>
       <label>Target 1 (R multiple)<input name="target1_rr" type="number" step="any" required></label>
       <label>Target 2 (R multiple)<input name="target2_rr" type="number" step="any" required></label>
@@ -74,6 +75,7 @@
       <label>Fallback stop (%)<input name="default_stop_pct" type="number" step="any" required></label>
       <label>Time stop (days)<input name="max_hold_days" type="number" step="1" required></label>
       <label>Max open positions<input name="max_open_positions" type="number" step="1" required></label>
+      <label>Exchange suffix <small>(.NS = NSE, .BO = BSE, blank = none)</small><input name="exchange_suffix"></label>
     </div>
     <div class="form-actions">
       <button value="cancel" class="ghost" formnovalidate>Cancel</button>
@@ -91,6 +93,7 @@
       <option>Stop hit</option>
       <option>Target 1</option>
       <option>Target 2</option>
+      <option>Your target</option>
       <option>Trailing stop</option>
       <option>Trend broken (SMA50)</option>
       <option>Time stop</option>
@@ -108,6 +111,7 @@
     <h2>Edit <span id="editSymbol"></span></h2>
     <label>Initial stop (defines 1R)<input name="stop_price" type="number" step="any"></label>
     <label>Shares<input name="shares" type="number" step="1" min="1"></label>
+    <label>Your target price <small>(blank = none)</small><input name="target_price" type="number" step="any"></label>
     <label>Manual current price <small>(blank = use market data)</small><input name="manual_price" type="number" step="any"></label>
     <label>Notes<input name="notes"></label>
     <div class="form-actions">

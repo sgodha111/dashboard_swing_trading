@@ -51,6 +51,13 @@ class SettingsIn(BaseModel):
     default_stop_pct: float = Field(gt=0, lt=100)
     max_hold_days: int = Field(gt=0)
     max_open_positions: int = Field(gt=0)
+    exchange_suffix: str = Field(default="", max_length=8)
+
+    @field_validator("exchange_suffix")
+    @classmethod
+    def suffix(cls, v: str) -> str:
+        v = v.strip().upper()
+        return f".{v}" if v and not v.startswith(".") else v
 
 
 class TradeIn(BaseModel):
@@ -59,6 +66,7 @@ class TradeIn(BaseModel):
     entry_price: float = Field(gt=0)
     stop_price: float | None = Field(default=None, gt=0)
     shares: int | None = Field(default=None, gt=0)
+    target_price: float | None = Field(default=None, gt=0)
     setup: str | None = None
     notes: str | None = None
 
@@ -72,6 +80,7 @@ class TradeUpdate(BaseModel):
     stop_price: float | None = Field(default=None, gt=0)
     shares: int | None = Field(default=None, gt=0)
     manual_price: float | None = None  # send 0 to clear
+    target_price: float | None = None  # send 0 to clear
     setup: str | None = None
     notes: str | None = None
 
@@ -85,7 +94,32 @@ class CloseIn(BaseModel):
 # ---------------------------------------------------------------- helpers
 
 
+def normalize_symbol(symbol: str, settings: Settings) -> str:
+    """RELIANCE -> RELIANCE.NS when an exchange suffix is configured; leaves AAPL.US-style symbols, indices (^NSEI) alone."""
+    suffix = settings.exchange_suffix or ""
+    if suffix and "." not in symbol and not symbol.startswith("^") and "=" not in symbol:
+        return symbol + suffix
+    return symbol
+
+
+def capital_state(db: Session, settings: Settings, exclude_id: int | None = None) -> dict:
+    """Equity = starting capital + realised P&L; available = equity - cost of open positions."""
+    realised = sum(
+        calc.closed_result(t)["pnl"] for t in db.scalars(select(Trade).where(Trade.status == "closed"))
+    )
+    deployed = sum(
+        t.entry_price * t.shares
+        for t in db.scalars(select(Trade).where(Trade.status == "open"))
+        if t.id != exclude_id
+    )
+    return calc.capital(settings, realised, deployed)
+
+
 def resolve_plan(db: Session, data: TradeIn, settings: Settings, fetch: bool = True) -> dict:
+    data.symbol = normalize_symbol(data.symbol, settings)
+    if data.target_price is not None and data.target_price <= data.entry_price:
+        raise HTTPException(400, "Target price must be above the entry price.")
+    cap = capital_state(db, settings)
     ind, data_error = {}, None
     if fetch:
         cache = market.get_bars(db, data.symbol, data.entry_date)
@@ -97,9 +131,12 @@ def resolve_plan(db: Session, data: TradeIn, settings: Settings, fetch: bool = T
         stop, method = calc.initial_stop(data.entry_price, settings, ind.get("atr14"))
     if stop >= data.entry_price:
         raise HTTPException(400, "Stop must be below the entry price (long trades only).")
-    suggested = calc.position_size(data.entry_price, stop, settings)
+    suggested = calc.position_size(data.entry_price, stop, settings, cap["equity"], cap["available_capital"])
     shares = data.shares or suggested
     return {
+        "symbol": data.symbol,
+        **cap,
+        "available_after": cap["available_capital"] - data.entry_price * shares,
         "stop_price": stop,
         "stop_method": method,
         "shares": shares,
@@ -107,7 +144,7 @@ def resolve_plan(db: Session, data: TradeIn, settings: Settings, fetch: bool = T
         "atr_at_entry": ind.get("atr14"),
         "trend_at_entry": calc.trend_check(ind),
         "data_error": data_error,
-        **calc.plan(data.entry_price, stop, shares, settings),
+        **calc.plan(data.entry_price, stop, shares, settings, data.target_price, cap["equity"]),
     }
 
 
@@ -119,6 +156,7 @@ def trade_dict(t: Trade) -> dict:
         "entry_price": t.entry_price,
         "stop_price": t.stop_price,
         "stop_method": t.stop_method,
+        "target_price": t.target_price,
         "shares": t.shares,
         "setup": t.setup,
         "notes": t.notes,
@@ -130,10 +168,13 @@ def trade_dict(t: Trade) -> dict:
     }
 
 
-def enrich_open(db: Session, t: Trade, settings: Settings, force: bool = False) -> dict:
+def enrich_open(db: Session, t: Trade, settings: Settings, force: bool = False,
+                equity: float | None = None) -> dict:
     cache = market.get_bars(db, t.symbol, t.entry_date, force=force)
     ind = market.indicators(cache.bars, entry_date=t.entry_date)
-    return {**trade_dict(t), **calc.evaluate(t, settings, ind), "data_error": cache.error}
+    if equity is None:
+        equity = capital_state(db, settings)["equity"]
+    return {**trade_dict(t), **calc.evaluate(t, settings, ind, equity=equity), "data_error": cache.error}
 
 
 def get_trade(db: Session, trade_id: int) -> Trade:
@@ -189,6 +230,7 @@ def create_trade(body: TradeIn, db: Session = Depends(get_db)):
         entry_price=body.entry_price,
         stop_price=p["stop_price"],
         stop_method=p["stop_method"],
+        target_price=body.target_price,
         shares=p["shares"],
         setup=body.setup or None,
         notes=body.notes or None,
@@ -207,11 +249,12 @@ def list_trades(status: str = "open", refresh: bool = False, db: Session = Depen
     trades = db.scalars(q.order_by(Trade.entry_date.desc(), Trade.id.desc())).all()
     out = []
     refreshed: set[str] = set()
+    equity = capital_state(db, settings)["equity"]
     for t in trades:
         if t.status == "open":
             force = refresh and t.symbol not in refreshed
             refreshed.add(t.symbol)
-            out.append(enrich_open(db, t, settings, force=force))
+            out.append(enrich_open(db, t, settings, force=force, equity=equity))
         else:
             out.append({**trade_dict(t), **calc.closed_result(t)})
     return out
@@ -229,6 +272,10 @@ def update_trade(trade_id: int, body: TradeUpdate, db: Session = Depends(get_db)
         t.shares = data["shares"]
     if "manual_price" in data:
         t.manual_price = data["manual_price"] or None
+    if "target_price" in data:
+        if data["target_price"] and data["target_price"] <= t.entry_price:
+            raise HTTPException(400, "Target price must be above the entry price.")
+        t.target_price = data["target_price"] or None
     for k in ("setup", "notes"):
         if k in data:
             setattr(t, k, data[k] or None)
@@ -268,23 +315,34 @@ def delete_trade(trade_id: int, db: Session = Depends(get_db)):
 @app.get("/api/summary")
 def summary(db: Session = Depends(get_db)):
     settings = get_settings(db)
-    open_trades = [enrich_open(db, t, settings) for t in db.scalars(select(Trade).where(Trade.status == "open"))]
+    cap = capital_state(db, settings)
+    open_trades = [
+        enrich_open(db, t, settings, equity=cap["equity"])
+        for t in db.scalars(select(Trade).where(Trade.status == "open"))
+    ]
     closed = db.scalars(
         select(Trade).where(Trade.status == "closed").order_by(Trade.exit_date, Trade.id)
     ).all()
     stats = calc.journal_stats([calc.closed_result(t) for t in closed])
-    deployed = sum(t["position_value"] for t in open_trades)
+    unrealized = sum(t["pnl"] or 0 for t in open_trades)
+    # positions without a price are valued at cost
+    market_value = sum(t["market_value"] if t["market_value"] is not None else t["position_value"] for t in open_trades)
     return {
+        **cap,
         "open_positions": len(open_trades),
         "max_open_positions": settings.max_open_positions,
-        "capital_deployed": deployed,
-        "capital_deployed_pct": deployed / settings.account_size * 100,
+        "capital_deployed_pct": cap["capital_deployed"] / cap["equity"] * 100 if cap["equity"] else None,
+        "market_value": market_value,
+        "account_value": cap["available_capital"] + market_value,  # cash + open positions at today's price
         "open_risk": sum(t["open_risk"] or 0 for t in open_trades),
-        "unrealized_pnl": sum(t["pnl"] or 0 for t in open_trades),
+        "unrealized_pnl": unrealized,
+        "potential_target1": sum(t["profit_target1"] for t in open_trades),
+        "potential_target2": sum(t["profit_target2"] for t in open_trades),
+        "potential_plan": sum(t["profit_plan"] for t in open_trades),
+        "max_loss_total": sum(t["max_loss"] for t in open_trades),
         "exit_signals": sum(1 for t in open_trades if t["signal"] == calc.EXIT),
         "action_signals": sum(1 for t in open_trades if t["signal"] == calc.ACTION),
         "account_size": settings.account_size,
-        "equity": settings.account_size + stats["total_pnl"],
         **stats,
     }
 
@@ -313,6 +371,7 @@ def export_csv(db: Session = Depends(get_db)):
 @app.get("/api/symbol/{symbol}")
 def symbol_info(symbol: str, db: Session = Depends(get_db)):
     """Quick look-up for the add-trade form: last price + trend filter."""
+    symbol = normalize_symbol(symbol.strip().upper(), get_settings(db))
     cache = market.get_bars(db, symbol)
     ind = market.indicators(cache.bars)
     return {"symbol": symbol.upper(), **ind, "trend": calc.trend_check(ind), "data_error": cache.error}

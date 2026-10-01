@@ -2,7 +2,8 @@
 
 Rules implemented (all thresholds come from Settings):
   * Initial stop: user supplied, else entry - ATR_MULT x ATR(14), else entry - DEFAULT_STOP_PCT.
-  * 1R = entry - initial stop.  Shares = (account x risk%) / 1R, capped by account size.
+  * 1R = entry - initial stop.  Shares = (equity x risk%) / 1R, capped by the cash still available.
+    Equity = starting capital + realised P&L; available cash = equity - money tied up in open trades.
   * Target 1 = entry + T1_RR x R  (take partial profit, start trailing)
     Target 2 = entry + T2_RR x R  (exit the rest)
   * Once price has closed >= entry + BREAKEVEN_R x R, the stop moves to breakeven.
@@ -24,28 +25,55 @@ def initial_stop(entry: float, settings, atr: float | None) -> tuple[float, str]
     return round(entry * (1 - settings.default_stop_pct / 100), 4), f"{settings.default_stop_pct:g}%"
 
 
-def position_size(entry: float, stop: float, settings) -> int:
+def capital(settings, realised_pnl: float, deployed: float) -> dict:
+    equity = settings.account_size + realised_pnl
+    return {
+        "equity": equity,
+        "capital_deployed": deployed,
+        "available_capital": equity - deployed,
+    }
+
+
+def position_size(entry: float, stop: float, settings, equity: float | None = None,
+                  available: float | None = None) -> int:
+    """Shares so that hitting the stop loses risk% of equity, never spending more than the available cash."""
     risk_per_share = entry - stop
     if risk_per_share <= 0 or entry <= 0:
         return 0
-    by_risk = math.floor(settings.account_size * settings.risk_pct / 100 / risk_per_share)
-    by_capital = math.floor(settings.account_size / entry)
+    equity = settings.account_size if equity is None else equity
+    available = equity if available is None else available
+    by_risk = math.floor(equity * settings.risk_pct / 100 / risk_per_share)
+    by_capital = math.floor(max(available, 0) / entry)
     return max(0, min(by_risk, by_capital))
 
 
-def plan(entry: float, stop: float, shares: int, settings) -> dict:
-    """Static numbers that are known at entry time."""
+def plan(entry: float, stop: float, shares: int, settings, target: float | None = None,
+         equity: float | None = None) -> dict:
+    """Static numbers that are known at entry time, including the profit at each target."""
     r = entry - stop
-    return {
+    equity = settings.account_size if equity is None else equity
+    t1 = entry + settings.target1_rr * r
+    t2 = entry + settings.target2_rr * r
+    half = shares // 2
+    out = {
         "risk_per_share": r,
         "position_value": entry * shares,
         "max_loss": r * shares,
-        "risk_pct_of_account": (r * shares) / settings.account_size * 100 if settings.account_size else None,
-        "target1": entry + settings.target1_rr * r,
-        "target2": entry + settings.target2_rr * r,
+        "risk_pct_of_account": (r * shares) / equity * 100 if equity else None,
+        "target1": t1,
+        "target2": t2,
+        "profit_target1": (t1 - entry) * shares,
+        "profit_target2": (t2 - entry) * shares,
+        # the strategy's plan: sell half at Target 1, the rest at Target 2
+        "profit_plan": (t1 - entry) * half + (t2 - entry) * (shares - half),
         "breakeven_trigger": entry + settings.breakeven_r * r,
         "stop_pct": r / entry * 100 if entry else None,
+        "target_price": target,
+        "profit_target": (target - entry) * shares if target else None,
+        "target_pct": (target - entry) / entry * 100 if target else None,
+        "target_rr": (target - entry) / r if target and r > 0 else None,
     }
+    return out
 
 
 def trend_check(ind: dict) -> dict:
@@ -72,10 +100,10 @@ def trend_check(ind: dict) -> dict:
     return {"ok": ok, "text": " · ".join(checks)}
 
 
-def evaluate(trade, settings, ind: dict, today: date | None = None) -> dict:
+def evaluate(trade, settings, ind: dict, today: date | None = None, equity: float | None = None) -> dict:
     """Live management of an open trade: current stop, P&L and what to do now."""
     today = today or date.today()
-    p = plan(trade.entry_price, trade.stop_price, trade.shares, settings)
+    p = plan(trade.entry_price, trade.stop_price, trade.shares, settings, trade.target_price, equity)
     r = p["risk_per_share"]
 
     price = trade.manual_price if trade.manual_price is not None else ind.get("last_close")
@@ -103,6 +131,7 @@ def evaluate(trade, settings, ind: dict, today: date | None = None) -> dict:
         "price": price,
         "price_source": price_source,
         "price_date": ind.get("last_date") if price_source == "market" else None,
+        "market_value": price * trade.shares if price is not None else None,
         "current_stop": stop,
         "stop_label": stop_label,
         "trailing_stop": trailing,
@@ -117,7 +146,8 @@ def evaluate(trade, settings, ind: dict, today: date | None = None) -> dict:
 
     if price is None:
         out.update(signal=WATCH, action="No price — refresh data or enter a manual price",
-                   pnl=None, pnl_pct=None, r_multiple=None, open_risk=None, progress=None)
+                   pnl=None, pnl_pct=None, r_multiple=None, open_risk=None, progress=None,
+                   to_target1=None, to_target2=None, to_target=None)
         return out
 
     pnl = (price - trade.entry_price) * trade.shares
@@ -128,6 +158,10 @@ def evaluate(trade, settings, ind: dict, today: date | None = None) -> dict:
         r_multiple=r_mult,
         # what you'd lose from here if the current stop is hit (negative = locked-in profit)
         open_risk=(price - stop) * trade.shares if price > stop else 0.0,
+        # profit still to be made from here if the targets are reached
+        to_target1=(p["target1"] - price) * trade.shares,
+        to_target2=(p["target2"] - price) * trade.shares,
+        to_target=(trade.target_price - price) * trade.shares if trade.target_price else None,
         locked_in=(stop - trade.entry_price) * trade.shares,
         # 0% = at stop, 100% = at target 2
         progress=max(0.0, min(100.0, (price - trade.stop_price) / (p["target2"] - trade.stop_price) * 100))
@@ -142,6 +176,8 @@ def evaluate(trade, settings, ind: dict, today: date | None = None) -> dict:
         sig, act = EXIT, f"EXIT — {stop_label.lower()} hit ({stop:.2f})"
     elif price >= p["target2"]:
         sig, act = EXIT, f"EXIT — Target 2 reached ({p['target2']:.2f}), take full profit"
+    elif trade.target_price and price >= trade.target_price:
+        sig, act = EXIT, f"EXIT — your target reached ({trade.target_price:.2f}), book the profit"
     elif sma50 is not None and price < sma50 - trend_buffer:
         sig, act = EXIT, f"EXIT — closed clearly below SMA50 ({sma50:.2f}), trend invalidated"
     elif t1_reached:
